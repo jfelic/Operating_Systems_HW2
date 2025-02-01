@@ -63,6 +63,11 @@ int bind_port(unsigned int port_number)
 // Return:      Termination status of client (0 = No Errors, -1 = Error)
 //
 int accept_client(int server_socket_fd)
+/*
+  - After accepting a client's request, we're gonna use fork() to create a new child process for that request.
+  - This allows parent process to continue accepting new connections while the child process manages the communication...
+  with specific client.
+*/
 {
   int exit_status = OK;
   int client_socket_fd = -1;
@@ -80,6 +85,61 @@ int accept_client(int server_socket_fd)
   // -------------------------------------
   // Modify code to fork a child process
   // -------------------------------------
+  int pid;
+  int parent_pid;
+  int child_pid;
+
+  printf("Attempting to fork() a child process\n");
+
+  //Store the parent pid
+  parent_pid = getpid();
+
+  /* 
+    fork() returns the following:
+    - Parent process: returns PID of child process (which is an int > 0)
+    - Child process: return 0
+    - Failure: returns -1
+  */ 
+  pid = fork();
+
+  if (pid > 0)
+  // Parent process
+  {
+    printf("Parent process!/n");
+    // child_pid = pid; // store child pid. Not sure if we need this yet...
+    close(client_socket_fd); // Close the client socket in the parent
+  }
+  else if (pid == 0) 
+  // Child process
+  {
+    printf("Child process!\n");
+    close(server_socket_fd); // Close the inherited server socket
+
+    // Read client's request
+    bzero(request, 2048);
+    read(client_socket_fd, request, 2047);
+
+    // Example entity body for testing purposes
+    char* entity_body = "<html><body><h2>CSCI 340 (Operating Systems) Homework 2</h2><table border=1 width=\"50%\"><tr><th>Key</th><th>Value</th></tr></table></body></html>";
+
+    char response[512];
+    sprintf(response, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s",
+            (int)strlen(entity_body), entity_body);
+
+    if (DEBUG) printf("%s\n", response);
+
+    write(client_socket_fd, response, strlen(response));
+
+    close(client_socket_fd);
+    exit(OK);
+  }
+  else 
+  // fork() failed
+  {
+    printf("fork() failed\n");
+    close(server_socket_fd);
+    return FAIL;
+  }
 
   if (client_socket_fd >= 0) {
     bzero(request, 2048);

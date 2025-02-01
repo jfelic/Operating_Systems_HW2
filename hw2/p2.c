@@ -32,11 +32,19 @@ int main(int argc, char *argv[])
   // Register the signal handlers
 
   if (signal(SIGINT, sig_int_handler) == SIG_ERR) {
+    /* 
+      Sent to a process by its terminal to indicate an interrupt
+      Usually CTRL + C
+    */
     perror("Unable to create signal interupt handler!");
     exit(FAIL);
   }
 
   if (signal(SIGCHLD, sig_child_handler) == SIG_ERR) {
+    /*
+      Sent to a parent process when one of its child processes terminate, stops, or resumes
+      Common trigger: A child process using fork() has finished or stopped execution
+    */
     perror("Unable to create signal child handler!");
     exit(FAIL);
   }
@@ -85,4 +93,13 @@ static void sig_child_handler(int sig)
   // You complete child signal handler code to remove child process from
   // process table (i.e. reap the child)
   // -------------------------------------
+  pid_t pid;
+  int status;
+
+  // Reap all terminated child processes
+  while((pid = -1, &status, WNOHANG) > 0) { 
+    // WHOHANG ensures that waitpid() returns immediately if no child process has exited.
+    // This prevents the parent process getting blocked
+    printf("Child process %d terminated\n", pid);
+  }
 } // end sig_child_handler function
