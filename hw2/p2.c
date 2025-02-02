@@ -66,8 +66,8 @@ int main(int argc, char *argv[])
       printf("Stopping http server!\n");
     } else {
       while (listen(server_socket_fd, 1) == 0) {
-	printf("Server socket listening and accepting connections on port %d\n", port_number);
-	accept_client(server_socket_fd);
+        printf("Server socket listening and accepting connections on port %d\n", port_number);
+        accept_client(server_socket_fd);
       }
     }
   } else {
@@ -97,7 +97,7 @@ static void sig_child_handler(int sig)
   int status;
 
   // Reap all terminated child processes
-  while((pid = -1, &status, WNOHANG) > 0) { 
+  while((pid = waitpid(-1, &status, WNOHANG)) > 0) { 
     // WHOHANG ensures that waitpid() returns immediately if no child process has exited.
     // This prevents the parent process getting blocked
     printf("Child process %d terminated\n", pid);

@@ -63,154 +63,199 @@ int bind_port(unsigned int port_number)
 // Return:      Termination status of client (0 = No Errors, -1 = Error)
 //
 int accept_client(int server_socket_fd)
-/*
-  - After accepting a client's request, we're gonna use fork() to create a new child process for that request.
-  - This allows parent process to continue accepting new connections while the child process manages the communication...
-  with specific client.
-*/
 {
-  int exit_status = OK;
-  int client_socket_fd = -1;
-  socklen_t client_length; 
-  struct sockaddr_in client_address;
-  char request[2048];
+    printf("accept_client() function called\n");
+    int exit_status = OK;
+    int client_socket_fd = -1;
+    socklen_t client_length; 
+    struct sockaddr_in client_address;
+    char request[2048];
+    client_length = sizeof(client_address);
 
-  client_length = sizeof(client_address);
+    // Accept connection
+    client_socket_fd = accept(server_socket_fd,
+                              (struct sockaddr *) &client_address,
+                              &client_length);
+    if (client_socket_fd < 0) {
+        perror("accept() error");
+        return FAIL;
+    }
 
-  client_socket_fd = accept(server_socket_fd,
-			     (struct sockaddr *) &client_address,
-			     &client_length);
-  // -------------------------------------
-  // TODO:
-  // -------------------------------------
-  // Modify code to fork a child process
-  // -------------------------------------
-  int pid;
-  int parent_pid;
-  int child_pid;
+    // Fork a child to handle the request
+    int pid = fork();
+    if (pid > 0) {
+        // --------------------------
+        // PARENT PROCESS
+        // --------------------------
+        // Immediately close the child’s socket so the parent can
+        // keep listening for new connections.
+        close(client_socket_fd);
+        return OK;
+    }
+    else if (pid < 0) {
+        // Fork error
+        perror("fork() error");
+        close(client_socket_fd);
+        return FAIL;
+    }
 
-  printf("Attempting to fork() a child process\n");
+    // --------------------------
+    // CHILD PROCESS
+    // --------------------------
+    // The child does not need the original server socket
+    close(server_socket_fd);
 
-  //Store the parent pid
-  parent_pid = getpid();
+    // Read the raw HTTP request into 'request'
+    bzero(request, sizeof(request));
+    read(client_socket_fd, request, sizeof(request) - 1);
 
-  /* 
-    fork() returns the following:
-    - Parent process: returns PID of child process (which is an int > 0)
-    - Child process: return 0
-    - Failure: returns -1
-  */ 
-  pid = fork();
+    // 1) Parse out the METHOD, PATH, and VERSION from the request line
+    //    Example request line:
+    //    GET /?first=anthony&last=leclerc HTTP/1.1
+    char method[8], path[1024], version[16];
+    bzero(method, sizeof(method));
+    bzero(path, sizeof(path));
+    bzero(version, sizeof(version));
 
-  if (pid > 0)
-  // Parent process
-  {
-    printf("Parent process!/n");
-    // child_pid = pid; // store child pid. Not sure if we need this yet...
-    close(client_socket_fd); // Close the client socket in the parent
-  }
-  else if (pid == 0) 
-  // Child process
-  {
-    printf("Child process!\n");
-    close(server_socket_fd); // Close the inherited server socket
+    // Use sscanf to grab the first line (method, path, version)
+    sscanf(request, "%s %s %s", method, path, version);
 
-    // Read client's request
-    bzero(request, 2048);
-    read(client_socket_fd, request, 2047);
+    //
+    // Check if client requested /SimplePost.html with GET
+    //
+    // If so, we can serve a small hard-coded HTML page (or read from disk).
+    //
+    if (strncmp(method, "GET", 3) == 0 && strstr(path, "SimplePost.html")) {
+        // SimplePost.html:
+        const char *simple_post_html =
+            "<html>\r\n"
+            "<head>\r\n"
+            "  <meta charset=\"UTF-8\">\r\n"
+            "  <title>Simple Post</title>\r\n"
+            "</head>\r\n"
+            "<body>\r\n"
+            "  <form method=\"POST\" action=\"/\">\r\n"
+            "    <b>first</b>&nbsp;<input type=\"text\" name=\"first\"><br>\r\n"
+            "    <b>last</b>&nbsp;<input type=\"text\" name=\"last\"><br>\r\n"
+            "    <input type=\"submit\">\r\n"
+            "  </form>\r\n"
+            "</body>\r\n"
+            "</html>\r\n";
 
-    // Example entity body for testing purposes
-    char* entity_body = "<html><body><h2>CSCI 340 (Operating Systems) Homework 2</h2><table border=1 width=\"50%\"><tr><th>Key</th><th>Value</th></tr></table></body></html>";
+        char response[4096];
+        sprintf(response,
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Length: %d\r\n"
+                "Content-Type: text/html\r\n"
+                "\r\n"
+                "%s",
+                (int)strlen(simple_post_html),
+                simple_post_html);
 
-    char response[512];
-    sprintf(response, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s",
-            (int)strlen(entity_body), entity_body);
+        write(client_socket_fd, response, strlen(response));
+        close(client_socket_fd);
+        exit(OK);
+    }
 
-    if (DEBUG) printf("%s\n", response);
+    // 2) We will store our response HTML in here:
+    char entity_body[8192];
+    bzero(entity_body, sizeof(entity_body));
 
+    // Simple helper function
+    #define APPEND_STR(dst, src) strncat(dst, src, sizeof(dst) - strlen(dst) - 1)
+
+    // Prepare the initial HTML
+    // We'll fill in either "GET Operation" or "POST Operation"
+    // plus the table rows for key=value pairs
+    if (strncmp(method, "GET", 3) == 0) {
+        // -------------------------------------------------
+        //   PARSE GET
+        // -------------------------------------------------
+        APPEND_STR(entity_body, "<html><body>\n");
+        APPEND_STR(entity_body, "<h1>GET Operation</h1>\n");
+        APPEND_STR(entity_body, "<table cellpadding=5 cellspacing=5 border=1>\n");
+
+        // Look for '?' in the path
+        char *qmark = strchr(path, '?');
+        if (qmark != NULL) {
+            // skip the '?'
+            qmark++;
+
+            // Tokenize on '&'
+            char *pair = strtok(qmark, "&");
+            while (pair) {
+                // each pair is "key=value"
+                char *eq = strchr(pair, '=');
+                if (eq) {
+                    *eq = '\0';   // split pair into key / value
+                    char *key = pair;
+                    char *val = eq + 1;
+
+                    APPEND_STR(entity_body, "<tr><td><b>");
+                    APPEND_STR(entity_body, key);
+                    APPEND_STR(entity_body, "</b></td><td>");
+                    APPEND_STR(entity_body, val);
+                    APPEND_STR(entity_body, "</td></tr>\n");
+                }
+                pair = strtok(NULL, "&");
+            }
+        }
+
+        APPEND_STR(entity_body, "</table>\n</body></html>\n");
+    }
+    else if (strncmp(method, "POST", 4) == 0) {
+        // -------------------------------------------------
+        //   PARSE POST
+        // -------------------------------------------------
+        APPEND_STR(entity_body, "<html><body>\n");
+        APPEND_STR(entity_body, "<h1>POST Operation</h1>\n");
+        APPEND_STR(entity_body, "<table cellpadding=5 cellspacing=5 border=1>\n");
+
+        // For POST, the key=value pairs are in the *body* after the blank line
+        char *body = strstr(request, "\r\n\r\n");
+        if (body) {
+            body += 4; // skip the "\r\n\r\n"
+
+            // Body should now point to "first=anthony&last=leclerc" etc.
+            char *pair = strtok(body, "&");
+            while (pair) {
+                char *eq = strchr(pair, '=');
+                if (eq) {
+                    *eq = '\0';
+                    char *key = pair;
+                    char *val = eq + 1;
+                    APPEND_STR(entity_body, "<tr><td><b>");
+                    APPEND_STR(entity_body, key);
+                    APPEND_STR(entity_body, "</b></td><td>");
+                    APPEND_STR(entity_body, val);
+                    APPEND_STR(entity_body, "</td></tr>\n");
+                }
+                pair = strtok(NULL, "&");
+            }
+        }
+
+        APPEND_STR(entity_body, "</table>\n</body></html>\n");
+    }
+    else {
+        // -------------------------------------------------
+        //   UNSUPPORTED METHOD
+        // -------------------------------------------------
+        strcpy(entity_body, "<html><body><h1>501 Not Implemented</h1></body></html>");
+    }
+
+    // 3) Build the full HTTP response (status line + headers + blank line + body)
+    char response[16384];
+    sprintf(response,
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: %d\r\n"
+            "Content-Type: text/html\r\n"
+            "\r\n"
+            "%s",
+            (int)strlen(entity_body),
+            entity_body);
+
+    // 4) Send it back
     write(client_socket_fd, response, strlen(response));
-
     close(client_socket_fd);
     exit(OK);
-  }
-  else 
-  // fork() failed
-  {
-    printf("fork() failed\n");
-    close(server_socket_fd);
-    return FAIL;
-  }
-
-  if (client_socket_fd >= 0) {
-    bzero(request, 2048);
-    read(client_socket_fd, request, 2047);
-    if (DEBUG) printf("Here is the http message:\n%s\n\n", request);
-		
-    // -------------------------------------
-    // TODO:
-    // -------------------------------------
-    // Generate the correct http response when a GET or POST method is sent
-    // from the client to the server.
-    // 
-    // In general, you will parse the request character array to:
-    // 1) Determine if a GET or POST method was used
-    // 2) Then retrieve the key/value pairs (see below)
-    // -------------------------------------
-		
-    /*
-      ------------------------------------------------------
-      GET method key/values are located in the URL of the request message
-
-      ? - indicates the beginning of the key/value pairs in the URL
-      & - is used to separate multiple key/value pairs 
-      = - is used to separate the key and value
-      
-      Example:
-		 
-      http://localhost/?first=tony&last=leclerc
-		 
-      two &'s indicated two key/value pairs (first=tony and last=leclerc)
-      key = first, value = tony
-      key = last, value = leclerc
-      ------------------------------------------------------
-    */
-
-    /*
-      ------------------------------------------------------
-      POST method key/value pairs are located in the entity body of
-      the request message
-
-      ? - indicates the beginning of the key/value pairs
-      & - is used to delimit multiple key/value pairs 
-      = - is used to delimit key and value
-		 
-      Example:
-		 
-      first=tony&last=leclerc
-		 
-      two &'s indicated two key/value pairs (first=tony and last=leclerc)
-      key = first, value = tony
-      key = last, value = leclerc
-      ------------------------------------------------------
-    */
-		
-    // THIS IS AN EXAMPLE ENTITY BODY
-    char* entity_body = "<html><body><h2>CSCI 340 (Operating Systems) Homework 2</h2><table border=1 width=\"50%\"><tr><th>Key</th><th>Value</th></tr></table></body></html>";
-		
-    char response[512];
-    sprintf(response, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s",
-	     (int)strlen(entity_body), entity_body);
-		
-    if (DEBUG) printf("%s\n", response);
-		
-    write(client_socket_fd, response, strlen(response));
-
-    close(client_socket_fd);
-  } else {
-    exit_status = FAIL;
-  }
-
-  if (DEBUG) printf("Exit status = %d\n", exit_status);
-
-  return exit_status;
-} // end accept_client function
+}
